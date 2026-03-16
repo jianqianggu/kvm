@@ -14,6 +14,7 @@ import { Button } from "@components/Button";
 import { InputFieldWithLabel } from "@components/InputField";
 import { UpdateState, useDeviceStore, useUpdateStore } from "@/hooks/stores";
 import notifications from "@/notifications";
+import { formatters } from "@/utils";
 
 export interface SystemVersionInfo {
   local: { appVersion: string; systemVersion: string };
@@ -37,6 +38,7 @@ export default function SettingsVersion() {
   const updatePanelRef = useRef<HTMLDivElement | null>(null);
   const [updateSource, setUpdateSource] = useState("github");
   const [customUpdateBaseURL, setCustomUpdateBaseURL] = useState("");
+  const [updateDownloadProxy, setUpdateDownloadProxy] = useState("");
 
   const currentVersions = useDeviceStore(state => {
     const { appVersion, systemVersion } = state;
@@ -55,6 +57,13 @@ export default function SettingsVersion() {
     send("getCustomUpdateBaseURL", {}, resp => {
       if ("error" in resp) return;
       setCustomUpdateBaseURL(resp.result as string);
+    });
+  }, [send]);
+
+  useEffect(() => {
+    send("getUpdateDownloadProxy", {}, resp => {
+      if ("error" in resp) return;
+      setUpdateDownloadProxy(resp.result as string);
     });
   }, [send]);
 
@@ -95,6 +104,18 @@ export default function SettingsVersion() {
       notifications.success("Custom base URL applied");
     });
   }, [customUpdateBaseURL, send]);
+
+  const applyUpdateDownloadProxy = useCallback(() => {
+    send("setUpdateDownloadProxy", { proxy: updateDownloadProxy }, resp => {
+      if ("error" in resp) {
+        notifications.error(
+          `Failed to save update download proxy: ${resp.error.data || "Unknown error"}`,
+        );
+        return;
+      }
+      notifications.success("Update download proxy applied");
+    });
+  }, [send, updateDownloadProxy]);
 
   const closeUpdateDialog = useCallback(() => {
     setIsUpdateDialogOpen(false);
@@ -211,7 +232,14 @@ export default function SettingsVersion() {
 
           {isUpdateDialogOpen && (
             <div ref={updatePanelRef} className="pt-2">
-              <UpdateContent onClose={closeUpdateDialog} onConfirmUpdate={onConfirmUpdate} />
+              <UpdateContent
+                onClose={closeUpdateDialog}
+                onConfirmUpdate={onConfirmUpdate}
+                updateSource={updateSource}
+                updateDownloadProxy={updateDownloadProxy}
+                onUpdateDownloadProxyChange={setUpdateDownloadProxy}
+                onSaveUpdateDownloadProxy={applyUpdateDownloadProxy}
+              />
             </div>
           )}
         </div>
@@ -278,9 +306,17 @@ function UpdateSourceSettings({
 function UpdateContent({
   onClose,
   onConfirmUpdate,
+  updateSource,
+  updateDownloadProxy,
+  onUpdateDownloadProxyChange,
+  onSaveUpdateDownloadProxy,
 }: {
   onClose: () => void;
   onConfirmUpdate: () => void;
+  updateSource: string;
+  updateDownloadProxy: string;
+  onUpdateDownloadProxyChange: (proxy: string) => void;
+  onSaveUpdateDownloadProxy: () => void;
 }) {
   const [versionInfo, setVersionInfo] = useState<null | SystemVersionInfo>(null);
   const { modalView, setModalView, otaState } = useUpdateStore();
@@ -324,6 +360,10 @@ function UpdateContent({
           onConfirmUpdate={onConfirmUpdate}
           onClose={onClose}
           versionInfo={versionInfo!}
+          updateSource={updateSource}
+          updateDownloadProxy={updateDownloadProxy}
+          onUpdateDownloadProxyChange={onUpdateDownloadProxyChange}
+          onSaveUpdateDownloadProxy={onSaveUpdateDownloadProxy}
         />
       )}
 
@@ -482,11 +522,14 @@ function UpdatingDeviceState({
     const downloadFinishedAt = otaState[`${type}DownloadFinishedAt`];
     const verfiedAt = otaState[`${type}VerifiedAt`];
     const updatedAt = otaState[`${type}UpdatedAt`];
+    const downloadSpeedBps = (otaState as any)[`${type}DownloadSpeedBps`] as number | undefined;
+    const formattedSpeed =
+      downloadSpeedBps && downloadSpeedBps > 0 ? `${formatters.bytes(downloadSpeedBps, 1)}/s` : null;
 
     if (!otaState.metadataFetchedAt) {
       return "Fetching update information...";
     } else if (!downloadFinishedAt) {
-      return `Downloading ${type} update...`;
+      return formattedSpeed ? `Downloading ${type} update... (${formattedSpeed})` : `Downloading ${type} update...`;
     } else if (!verfiedAt) {
       return `Verifying ${type} update...`;
     } else if (!updatedAt) {
@@ -651,10 +694,18 @@ function UpdateAvailableState({
   versionInfo,
   onConfirmUpdate,
   onClose,
+  updateSource,
+  updateDownloadProxy,
+  onUpdateDownloadProxyChange,
+  onSaveUpdateDownloadProxy,
 }: {
   versionInfo: SystemVersionInfo;
   onConfirmUpdate: () => void;
   onClose: () => void;
+  updateSource: string;
+  updateDownloadProxy: string;
+  onUpdateDownloadProxyChange: (proxy: string) => void;
+  onSaveUpdateDownloadProxy: () => void;
 }) {
   const { $at } = useReactAt();
   return (
@@ -680,6 +731,21 @@ function UpdateAvailableState({
               </>
             ) : null}
           </p>
+
+          {updateSource === "github" && (
+            <div className="mb-4 flex items-end gap-x-2">
+              <InputFieldWithLabel
+                size="SM"
+                label={$at("Download Proxy Prefix")}
+                value={updateDownloadProxy}
+                onChange={e => onUpdateDownloadProxyChange(e.target.value)}
+                placeholder="https://gh-proxy.com/"
+              />
+              <AntdButton type="primary" onClick={onSaveUpdateDownloadProxy}>
+                {$at("Apply")}
+              </AntdButton>
+            </div>
+          )}
 
           <div className="space-y-4">
             <div className="flex items-center justify-start gap-x-2">
